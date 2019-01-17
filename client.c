@@ -42,7 +42,7 @@ int main(int argc, char **argv)
     serv_addr.sin_port = htons(0xBF00);
     vmcall_ping(7ULL);
 
-    if (inet_pton(AF_INET, "10.1.10.21", &serv_addr.sin_addr) <= 0) {
+    if (inet_pton(AF_INET, "10.1.10.22", &serv_addr.sin_addr) <= 0) {
         vmcall_ping(8ULL);
         perror("inet_pton failed");
         return 1;
