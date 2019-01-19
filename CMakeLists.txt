@@ -3,4 +3,4 @@ project(ndvm C)
 
 add_executable(ndvm-client client.c)
 install(TARGETS ndvm-client DESTINATION bin)
-install(FILES ndvm-init.sh DESTINATION bin)
+install(PROGRAMS ndvm-init.sh DESTINATION bin)

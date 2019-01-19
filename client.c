@@ -64,26 +64,22 @@ int main(int argc, char **argv)
     strcpy(buf, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
     printf("New IP: %s\n", buf);
 
-//    //vmcall_ping(5ULL);
-//    memset(&serv_addr, 0, sizeof(serv_addr));
-//    //vmcall_ping(6ULL);
-//
 //    serv_addr.sin_family = AF_INET;
 //    serv_addr.sin_port = htons(0xBF00);
-//    //vmcall_ping(7ULL);
+//    vmcall_ping(7ULL);
 //
-//    if (inet_pton(AF_INET, "10.1.10.22", &serv_addr.sin_addr) <= 0) {
-//        //vmcall_ping(8ULL);
+//    if (inet_pton(AF_INET, "10.1.10.21", &serv_addr.sin_addr) <= 0) {
+//        vmcall_ping(8ULL);
 //        perror("inet_pton failed");
 //        return 1;
 //    }
-//    //vmcall_ping(9ULL);
+//    vmcall_ping(9ULL);
 //
 //    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) {
 //        __asm__ volatile(
 //            "mov $0xF00D, %%rax\n\t"
 //            "mov %0, %%rcx\n\t"
-//            "//vmcall\n\t"
+//            "vmcall\n\t"
 //            :
 //            : "rcx"((uint64_t)errno)
 //        );
@@ -92,16 +88,16 @@ int main(int argc, char **argv)
 //        return 1;
 //    }
 //
-//    //vmcall_ping(11ULL);
+//    vmcall_ping(11ULL);
 //    printf("ndvm: connected to 10.1.10.21\n");
-//    //vmcall_ping(12ULL);
+//    vmcall_ping(12ULL);
 //
 //    char *msg = "hello";
-//    //vmcall_ping(13ULL);
+//    vmcall_ping(13ULL);
 //    printf("ndvm: sending msg: %s\n", msg);
-//    //vmcall_ping(14ULL);
+//    vmcall_ping(14ULL);
 //    send(sock, msg, 5, 0);
-//    //vmcall_ping(15ULL);
+//    vmcall_ping(15ULL);
 //    printf("ndvm: done\n");
-//    //vmcall_ping(16ULL);
+//    vmcall_ping(16ULL);
 }
