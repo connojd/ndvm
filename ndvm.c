@@ -1,4 +1,6 @@
 
+#define _GNU_SOURCE
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,7 +17,6 @@
  * The only information that is required as input is the
  * name of the interface
  */
-
 #include <sys/ioctl.h>
 #include <net/if.h>
 
@@ -30,24 +31,42 @@ int main(int argc, char **argv)
     struct sockaddr_in serv_addr, *local_addr;
     struct ifreq ifr;
 
-//    vmcall_ping(0ULL);
+    sock = socket(AF_INET, SOCK_STREAM, PROT_TCP);
 
     // Configure the local interface
-    sock = socket(AF_INET, SOCK_STREAM, PROT_TCP);
     ifr.ifr_addr.sa_family = AF_INET;
-    memcpy(ifr.ifr_name, "wlp58s0", IFNAMSIZ - 1);
+    memcpy(ifr.ifr_name, "eth0", IFNAMSIZ - 1);
+
+    // set the IP
     local_addr = (struct sockaddr_in *)&ifr.ifr_addr;
-
-    // convert to kosher format
-    inet_pton(AF_INET, "192.168.0.5", &local_addr->sin_addr);
-
-    // set the address
+    inet_pton(AF_INET, "10.1.10.191", &local_addr->sin_addr);
     if (ioctl(sock, SIOCSIFADDR, &ifr)) {
         printf("Failed to set IF addr: %s\n", strerror(errno));
         exit(errno);
     }
 
-//    vmcall_ping(1ULL);
+    // set the broadcast addr
+    local_addr = (struct sockaddr_in *)&ifr.ifr_broadaddr;
+    inet_pton(AF_INET, "10.1.10.255", &local_addr->sin_addr);
+    if (ioctl(sock, SIOCSIFBRDADDR, &ifr)) {
+        printf("Failed to set brdaddr: %s\n", strerror(errno));
+        exit(errno);
+    }
+
+    // set the netmask
+    local_addr = (struct sockaddr_in *)&ifr.ifr_netmask;
+    inet_pton(AF_INET, "255.255.255.0", &local_addr->sin_addr);
+    if (ioctl(sock, SIOCSIFNETMASK, &ifr)) {
+        printf("Failed to set netmask: %s\n", strerror(errno));
+        exit(errno);
+    }
+
+    // bring the iface up
+    ifr.ifr_flags = IFF_UP;
+    if (ioctl(sock, SIOCSIFFLAGS, &ifr)) {
+        printf("Failed to set IF flags: %s\n", strerror(errno));
+        exit(errno);
+    }
 
     if (sock == -1) {
         //vmcall_ping(2ULL);
@@ -64,40 +83,45 @@ int main(int argc, char **argv)
     strcpy(buf, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
     printf("New IP: %s\n", buf);
 
-//    serv_addr.sin_family = AF_INET;
-//    serv_addr.sin_port = htons(0xBF00);
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(0xBF00);
 //    vmcall_ping(7ULL);
-//
-//    if (inet_pton(AF_INET, "10.1.10.21", &serv_addr.sin_addr) <= 0) {
+
+    if (inet_pton(AF_INET, "10.1.10.152", &serv_addr.sin_addr) <= 0) {
 //        vmcall_ping(8ULL);
-//        perror("inet_pton failed");
-//        return 1;
-//    }
+        perror("inet_pton failed");
+        return 1;
+    }
 //    vmcall_ping(9ULL);
-//
-//    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) {
-//        __asm__ volatile(
-//            "mov $0xF00D, %%rax\n\t"
-//            "mov %0, %%rcx\n\t"
-//            "vmcall\n\t"
-//            :
-//            : "rcx"((uint64_t)errno)
-//        );
-//
-//        //perror("connect failed");
-//        return 1;
-//    }
-//
-//    vmcall_ping(11ULL);
-//    printf("ndvm: connected to 10.1.10.21\n");
-//    vmcall_ping(12ULL);
-//
-//    char *msg = "hello";
-//    vmcall_ping(13ULL);
-//    printf("ndvm: sending msg: %s\n", msg);
-//    vmcall_ping(14ULL);
-//    send(sock, msg, 5, 0);
-//    vmcall_ping(15ULL);
-//    printf("ndvm: done\n");
-//    vmcall_ping(16ULL);
+
+    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) {
+        //__asm__ volatile(
+        //    "mov $0xF00D, %%rax\n\t"
+        //    "mov %0, %%rcx\n\t"
+        //    "//vmcall\n\t"
+        //    :
+        //    : "rcx"((uint64_t)errno)
+        //);
+
+        perror("connect failed");
+        return 1;
+    }
+
+    //vmcall_ping(11ULL);
+    //printf("ndvm: connected to 10.1.10.21\n");
+    //vmcall_ping(12ULL);
+
+    char *msg = "hello\n";
+    //vmcall_ping(13ULL);
+    //printf("ndvm: sending msg: %s\n", msg);
+    //vmcall_ping(14ULL);
+
+    while (1) {
+        send(sock, msg, 5, 0);
+        sleep(2);
+    }
+
+    //vmcall_ping(15ULL);
+    //printf("ndvm: done\n");
+    //vmcall_ping(16ULL);
 }
