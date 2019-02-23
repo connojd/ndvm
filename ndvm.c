@@ -27,7 +27,6 @@
 int main(int argc, char **argv)
 {
     int in, sock;
-    char buf[32];
     struct sockaddr_in serv_addr, *local_addr;
     struct ifreq ifr;
 
@@ -78,11 +77,6 @@ int main(int argc, char **argv)
 //    printf("ndvm: socket opened\n");
     //vmcall_ping(4ULL);
 
-    memset(buf, 0, sizeof(buf));
-    ioctl(sock, SIOCGIFADDR, &ifr);
-    strcpy(buf, inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr));
-    printf("New IP: %s\n", buf);
-
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_port = htons(0xBF00);
 //    vmcall_ping(7ULL);
@@ -117,8 +111,8 @@ int main(int argc, char **argv)
     //vmcall_ping(14ULL);
 
     while (1) {
-        send(sock, msg, 5, 0);
-        sleep(2);
+        send(sock, msg, 7, 0);
+        sleep(1);
     }
 
     //vmcall_ping(15ULL);
