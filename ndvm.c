@@ -20,76 +20,119 @@
 #define PROT_TCP 6
 #define PAGE_SIZE 4096
 
-#define IFNAME "enp2s0"
-#define IP_NDVM "10.1.10.191"
-#define IP_SERV "10.1.10.22"
+#define IFNAME "eth0"
+#define SERV_IP "10.1.10.22"
+#define NDVM_IP "10.1.10.191"
+#define NDVM_BRD "10.1.10.255"
+#define NDVM_MASK "255.255.255.0"
+#define NDVM_PORT 0xBF00
 
-/**
- * read_server
- *
- * Read a message from the server
- *
- */
-int main(int argc, char **argv)
+#define __enum_domain_op 0xBF5C000000000100
+#define __enum_domain_op__ndvm_share_page 0x143
+
+int fd;
+char *rx_page;
+struct ifreq ifr;
+struct sockaddr_in serv_addr;
+struct sockaddr_in *ndvm_addr;
+
+uint64_t _vmcall(uint64_t r1, uint64_t r2, uint64_t r3, uint64_t r4);
+
+static void init_ndvm(void)
 {
-    int in, fd;
-    struct sockaddr_in serv_addr, *local_addr;
-    struct ifreq ifr;
-    char data[PAGE_SIZE];
-
     fd = socket(AF_INET, SOCK_STREAM, PROT_TCP);
 
-    // Configure the NDVM's interface
+    // Set name
     ifr.ifr_addr.sa_family = AF_INET;
     memcpy(ifr.ifr_name, IFNAME, IFNAMSIZ - 1);
 
-    // IP address of NDVM
-    local_addr = (struct sockaddr_in *)&ifr.ifr_addr;
-    inet_pton(AF_INET, IP_NDVM, &local_addr->sin_addr);
+    // Set IP address
+    ndvm_addr = (struct sockaddr_in *)&ifr.ifr_addr;
+    inet_pton(AF_INET, NDVM_IP, &ndvm_addr->sin_addr);
     if (ioctl(fd, SIOCSIFADDR, &ifr)) {
         printf("IP set failed: %s", strerror(errno));
         exit(errno);
     }
 
-    // Broadcast address of NDVM
-    local_addr = (struct sockaddr_in *)&ifr.ifr_broadaddr;
-    inet_pton(AF_INET, "10.1.10.255", &local_addr->sin_addr);
+    // Set broadcast address
+    ndvm_addr = (struct sockaddr_in *)&ifr.ifr_broadaddr;
+    inet_pton(AF_INET, NDVM_BRD, &ndvm_addr->sin_addr);
     if (ioctl(fd, SIOCSIFBRDADDR, &ifr)) {
         printf("BRD set failed: %s", strerror(errno));
         exit(errno);
     }
 
-    // Netmask of NDVM
-    local_addr = (struct sockaddr_in *)&ifr.ifr_netmask;
-    inet_pton(AF_INET, "255.255.255.0", &local_addr->sin_addr);
+    // Set netmask
+    ndvm_addr = (struct sockaddr_in *)&ifr.ifr_netmask;
+    inet_pton(AF_INET, NDVM_MASK, &ndvm_addr->sin_addr);
     if (ioctl(fd, SIOCSIFNETMASK, &ifr)) {
         printf("MASK set failed: %s", strerror(errno));
         exit(errno);
     }
 
-    // Bring the NIC up
+    // Bring it up
     ifr.ifr_flags = IFF_UP;
     if (ioctl(fd, SIOCSIFFLAGS, &ifr)) {
         printf("IFF UP failed: %s", strerror(errno));
         exit(errno);
     }
+}
 
+static void init_serv(void)
+{
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(0xBF00);
-    if (inet_pton(AF_INET, IP_SERV, &serv_addr.sin_addr) <= 0) {
-        printf("IFF UP failed: %s", strerror(errno));
+    serv_addr.sin_port = htons(NDVM_PORT);
+
+    if (inet_pton(AF_INET, SERV_IP, &serv_addr.sin_addr) <= 0) {
+        printf("init_serv: inet_pton failed: %s", strerror(errno));
         exit(errno);
     }
+}
+
+static inline void vmcall_share_page(void *page)
+{
+    _vmcall(__enum_domain_op,
+            __enum_domain_op__ndvm_share_page,
+            (uint64_t)page,
+            0);
+}
+
+static void init_chan(void)
+{
+    rx_page = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+    if (!rx_page) {
+        exit(1);
+    }
+
+    memset(rx_page, 0, PAGE_SIZE);
+
+    // Hypercall it down. the phys page this maps
+    // to will be what we remap bfexec to
+    vmcall_share_page(rx_page);
+}
+
+int main(int argc, char **argv)
+{
+    int in;
+    char data[PAGE_SIZE];
+
+    init_ndvm();
+    init_serv();
+    init_chan();
 
     if (connect(fd, (struct sockaddr *)&serv_addr, sizeof(serv_addr))) {
         printf("connect failed: %s", strerror(errno));
         exit(errno);
     }
 
-    do {
-        memset(data, 0 , PAGE_SIZE);
-        in = read(fd, data, PAGE_SIZE - 1);
-        printf("Received msg: %s", data);
-        sleep(1);
-    } while (in > 0);
+    // Now wait for read requests coming from dom0
+
+
+
+//    do {
+//        memset(data, 0 , PAGE_SIZE);
+//        in = read(fd, data, PAGE_SIZE - 1);
+//        printf("Received msg: %s", data);
+//        sleep(1);
+//    } while (in > 0);
 }
