@@ -31,7 +31,7 @@
 #define __enum_domain_op__ndvm_share_page 0x143
 
 int fd;
-char *rx_page;
+char *shm;
 struct ifreq ifr;
 struct sockaddr_in serv_addr;
 struct sockaddr_in *ndvm_addr;
@@ -99,16 +99,16 @@ static inline void vmcall_share_page(void *page)
 
 static void init_chan(void)
 {
-    rx_page = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
-    if (!rx_page) {
+    shm = aligned_alloc(PAGE_SIZE, PAGE_SIZE);
+    if (!shm) {
         exit(1);
     }
 
-    memset(rx_page, 0, PAGE_SIZE);
+    memset(shm, 0, PAGE_SIZE);
 
     // Hypercall it down. the phys page this maps
     // to will be what we remap bfexec to
-    vmcall_share_page(rx_page);
+    vmcall_share_page(shm);
 }
 
 int main(int argc, char **argv)
@@ -125,14 +125,17 @@ int main(int argc, char **argv)
         exit(errno);
     }
 
-    // Now wait for read requests coming from dom0
-
-
-
-//    do {
-//        memset(data, 0 , PAGE_SIZE);
-//        in = read(fd, data, PAGE_SIZE - 1);
-//        printf("Received msg: %s", data);
-//        sleep(1);
-//    } while (in > 0);
+    do {
+        memset(data, 0 , PAGE_SIZE);
+        in = read(fd, data, PAGE_SIZE - 1);
+        if (in > 0) {
+            snprintf(shm + 2, in, "%s", data);
+            __asm volatile("mfence");
+            *shm = 1; // tell dom0 data is ready
+            __asm volatile("mfence");
+            while (*shm == 1) { // spin until dom0 starts to read data
+                sleep(1);
+            }
+        }
+    } while (in > 0);
 }
