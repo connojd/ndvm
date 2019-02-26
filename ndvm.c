@@ -89,7 +89,7 @@ static void init_serv(void)
     }
 }
 
-static inline void vmcall_share_page(void *page)
+static inline void share_page(void *page)
 {
     _vmcall(__enum_domain_op,
             __enum_domain_op__ndvm_share_page,
@@ -108,7 +108,7 @@ static void init_chan(void)
 
     // Hypercall it down. the phys page this maps
     // to will be what we remap bfexec to
-    vmcall_share_page(shm);
+    share_page(shm);
 }
 
 int main(int argc, char **argv)
