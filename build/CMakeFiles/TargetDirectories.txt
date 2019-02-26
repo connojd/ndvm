@@ -1,7 +1,0 @@
-/home/dev/ndvm/build/CMakeFiles/install/strip.dir
-/home/dev/ndvm/build/CMakeFiles/edit_cache.dir
-/home/dev/ndvm/build/CMakeFiles/ndvm.dir
-/home/dev/ndvm/build/CMakeFiles/rebuild_cache.dir
-/home/dev/ndvm/build/CMakeFiles/list_install_components.dir
-/home/dev/ndvm/build/CMakeFiles/install/local.dir
-/home/dev/ndvm/build/CMakeFiles/install.dir
