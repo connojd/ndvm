@@ -6,4 +6,3 @@ add_custom_target(ndvm ALL
 )
 
 install(PROGRAMS ndvm DESTINATION bin)
-#install(PROGRAMS init DESTINATION bin)
