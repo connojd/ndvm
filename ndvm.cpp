@@ -96,6 +96,12 @@ struct channel {
             exit(0x66);
         }
 
+        int enable = 1;
+        if (setsockopt(this->highfd, SOL_SOCKET, SO_KEEPALIVE, &enable, sizeof(int)) < 0) {
+            printf("setsockopt failed: %s\n", strerror(errno));
+            exit(0x67);
+        }
+
         /**
          * Once we get here, we are ready to read from the low side
          */
