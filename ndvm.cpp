@@ -69,7 +69,7 @@ struct channel {
     channel(int lowfd)
     {
         const int prot = (PROT_READ | PROT_WRITE);
-        const int flag = (MAP_PRIVATE | MAP_ANON);
+        const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
 
         this->lowfd = lowfd;
         this->bufsz = 4096;
@@ -80,12 +80,15 @@ struct channel {
             exit(0xCC01);
         }
 
+        if (high_side) {
+            _vmcall(__enum_domain_op, __enum_domain_op__ndvm_share_page, (uint64_t)this->highbuf, 0);
+        }
+
         struct sockaddr_in sa;
         memset(&sa, 0, sizeof(sa));
         sa.sin_family = AF_INET;
         sa.sin_port = htons(PORT);
 
-//        printf("setting INET addr: %s\n", hi_addr);
         if (inet_pton(AF_INET, hi_addr, &sa.sin_addr) < 0) {
             exit(0xCC1U << 16 | errno);
         }
@@ -269,80 +272,49 @@ static void *run_channel(void *arg)
         tv.tv_usec = 80000; // timeout of 80ms
 
         int count = select(max_fd + 1, &rset, &wset, NULL, &tv);
-//        int count = select(max_fd + 1, &rset, &wset, NULL, NULL);
 
         if (count < 0) {
-            printf("select failed: %s\n", strerror(errno));
             exit(0xFD << 16 | errno);
         } else if (count == 0) {
-            printf("select timedout\n");
             close_low(chn);
             close_high(chn);
             return 0;
         }
 
         if (FD_ISSET(chn->lowfd, &rset)) {
-            int i;
-//            do {
-                i = recv(chn->lowfd, chn->lowbuf, chn->bufsz, 0);
-                if (i > 0) {
-                    chn->low_off += i;
-//                    printf("setting wset, highfd, lowfd rcvd: ");
-//                    dump_hex(chn->lowbuf, i);
-                }
-                //if (!i) {
-                //    close_low(chn);
-                //    close_high(chn);
-                //    return 0;
-                //}
-//            } while (i > 0);
+            int i = recv(chn->lowfd, chn->lowbuf, chn->bufsz, 0);
+            if (i > 0) {
+                chn->low_off += i;
+            }
         }
 
         if (FD_ISSET(chn->highfd, &wset)) {
-            int i;
-//            do {
-//                printf("send to highfd");
-                i = send(chn->highfd, chn->lowbuf, chn->low_off, 0);
-//                printf("send to highfd: %d\n", i);
-                if (i > 0) {
-                    chn->low_off -= i;
-//                    FD_SET(chn->highfd, &rset);
-//                    printf("setting rset, highfd\n");
-                }
-//            } while (i > 0 && chn->low_off > 0);
+            int i = send(chn->highfd, chn->lowbuf, chn->low_off, 0);
+            if (i > 0) {
+                chn->low_off -= i;
+            }
         }
 
         if (FD_ISSET(chn->highfd, &rset)) {
-            int i;
-//            do {
-                i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
-                if (i > 0) {
-                    chn->high_off += i;
-                }
-                if (!i) {
-                    close_low(chn);
-                    close_high(chn);
-                    return 0;
-                }
-//                    FD_SET(chn->lowfd, &wset);
-//                    printf("setting wset, lowfd\n");
-//
-//                } else if (i == 0) {
-////                    printf("highfd HUP\n");
-//                }
-//            } while (i > 0);
+            int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
+            if (i > 0) {
+                chn->high_off += i;
+            }
+            if (!i) {
+                close_low(chn);
+                close_high(chn);
+                return 0;
+            }
         }
 
         if (FD_ISSET(chn->lowfd, &wset)) {
-            int i;
-//            do {
-                i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
-                if (i > 0) {
-                    chn->high_off -= i;
-//                    FD_SET(chn->lowfd, &rset);
-//                    printf("setting rset, lowfd\n");
-                }
-//            } while (i > 0 && chn->high_off > 0);
+            if (high_side) {
+                _vmcall(__enum_domain_op, __enum_domain_op__access_ndvm_page, (uint64_t)chn->highbuf, 0);
+            }
+            int i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
+            if (i > 0) {
+                chn->high_off -= i;
+            }
         }
     }
 }
@@ -371,8 +343,6 @@ int main(int argc, char **argv)
         if (fd < 0) {
             exit(0xBF02);
         }
-
-//        dump_sock(ndvmfd, &sa);
 
         auto t = std::make_unique<struct channel>(fd);
         auto chn = t.get();
