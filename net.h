@@ -74,8 +74,20 @@ extern "C" {
 #define __enum_domain_op__set_write_mutex 0x14D
 #define __enum_domain_op__set_read_mutex 0x14E
 
-struct filter_desc {
-    /* GVA from the fvm */
+#define __enum_domain_op__lock_acquired 0x14F
+
+/**
+ * We repurpose the first entry of the queue as the header
+ * below to store the head and tail offsets
+ */
+struct filterq_hdr {
+    uintptr_t head;
+    uintptr_t tail;
+    uintptr_t pad[2];
+};
+
+struct filterq_work {
+    /* GVA from the filter vm */
     uintptr_t fva;
 
     /* GVA from the ndvm */
@@ -84,12 +96,49 @@ struct filter_desc {
     /* Number of bytes to filter */
     uintptr_t size;
 
+    /* Pad to get a power of 2 */
     uintptr_t pad;
 };
 
-static_assert(sizeof(struct filter_desc) == 32);
-inline const volatile uint64_t queue_capacity
-    = PAGE_SIZE / sizeof(struct filter_desc);
+static_assert(sizeof(struct filterq_work) == 32);
+static_assert(sizeof(struct filterq_work) == sizeof(struct filterq_hdr));
+
+/* capacity is max work entries + one header */
+inline const volatile uint64_t filterq_capacity
+    = PAGE_SIZE / sizeof(struct filterq_work);
+
+
+inline bool filterq_empty(struct filterq_hdr *hdr)
+{
+    return hdr->head == hdr->tail;
+}
+
+inline bool filterq_full(struct filterq_hdr *hdr)
+{
+    /* Must include the header entry */
+    return hdr->head == (hdr->tail + 2) % filterq_capacity;
+}
+
+inline void filterq_push(struct filterq_hdr *hdr, struct filterq_work *work)
+{
+
+}
+
+inline void push_filterq_work(struct filterq_hdr *hdr,
+                              std::mutex *mtx,
+                              struct filterq_work *work)
+{
+    mtx->lock();
+
+    if (filterq_full(hdr)) {
+        mtx->unlock();
+        return;
+    }
+    filterq_push(hdr, work);
+
+    mtx->unlock();
+}
+
 
 uint64_t _vmcall(uint64_t r1, uint64_t r2, uint64_t r3, uint64_t r4);
 
@@ -99,6 +148,14 @@ inline void dump_sock(int fd, struct sockaddr_in *sa)
            fd,
            inet_ntoa(sa->sin_addr),
            ntohs(sa->sin_port));
+}
+
+inline void dump_hex(const char *str, size_t len)
+{
+    for (int i = 0; i < len; i++) {
+        printf("%02x", str[i]);
+    }
+    printf("\n");
 }
 }
 #endif

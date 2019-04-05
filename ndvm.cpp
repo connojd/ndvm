@@ -47,13 +47,6 @@ static int open_socket(void)
     return fd;
 }
 
-static void dump_hex(const char *str, size_t len)
-{
-    for (int i = 0; i < len; i++) {
-        printf("%02x", str[i]);
-    }
-    printf("\n");
-}
 }
 
 /**
@@ -140,19 +133,23 @@ struct channel {
 
 extern "C" {
 
-volatile std::mutex write_mutex alignas(4096);
-volatile std::mutex read_mutex alignas(4096);
+std::mutex write_mutex alignas(4096);
+volatile uintptr_t write_head{};
+volatile uintptr_t write_tail{};
+volatile struct filterq_work *write_queue{};
 
-volatile struct filter_desc *write_queue{};
-volatile struct filter_desc *read_queue{};
+std::mutex read_mutex alignas(4096);
+volatile uintptr_t read_head{};
+volatile uintptr_t read_tail{};
+volatile struct filterq_work *read_queue{};
 
-static void init_filter_queues(void)
+static void init_filterq_queues(void)
 {
     const int prot = (PROT_READ | PROT_WRITE);
     const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
 
-    write_queue = (struct filter_desc *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
-    read_queue = (struct filter_desc *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
+    write_queue = (struct filterq_work *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
+    read_queue = (struct filterq_work *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
 
     if (write_queue == MAP_FAILED || read_queue == MAP_FAILED) {
         printf("%s: mmap failed\n", __func__);
@@ -161,6 +158,15 @@ static void init_filter_queues(void)
 
     memset((char *)write_queue, 0, PAGE_SIZE);
     memset((char *)read_queue, 0, PAGE_SIZE);
+
+    printf("%c\n", *(char *)&read_mutex);
+    printf("%c\n", *(char *)&write_mutex);
+
+    volatile char *dummy = (char *)&read_mutex;
+    dummy[0] = *(char *)&read_mutex;
+
+    dummy = (char *)&write_mutex;
+    dummy[0] = *(char *)&write_mutex;
 
     _vmcall(__enum_domain_op,
             __enum_domain_op__map_write_queue,
@@ -171,6 +177,8 @@ static void init_filter_queues(void)
             __enum_domain_op__map_read_queue,
             (uint64_t)read_queue,
             (uint64_t)&read_mutex);
+
+    // TODO: map heads/tails
 }
 
 /**
@@ -305,9 +313,19 @@ int main(int argc, char **argv)
     init_mem();
     init_addrs(argv[2]);
     init_nic(argv[1], argv[2]);
-    init_filter_queues();
+    init_filterq_queues();
 
     signal(SIGPIPE, sigpipe);
+
+    while (1) {
+        if (read_mutex.try_lock()) {
+            _vmcall(__enum_domain_op, __enum_domain_op__lock_acquired, 0, 0);
+            read_mutex.unlock();
+            dump_hex((char *)&read_mutex, sizeof(read_mutex));
+        }
+
+        sleep(1);
+    }
 
     while (1) {
         fd_set rset;
@@ -386,6 +404,16 @@ int main(int argc, char **argv)
                 int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
                 if (i > 0) {
                     chn->high_off += i;
+                    if (high_side) {
+                        // push filter work
+                        struct filterq_work work;
+                        work.nva = chn->highbuf;
+                        work.size = i;
+                        work.fva = 0;
+                        work.pad = 0;
+
+                        push_filterq_work(&write_queue, &write_mutex, &work);
+                    }
                 }
                 if (!i) {
                     close_channel(chn);
@@ -399,9 +427,6 @@ int main(int argc, char **argv)
             }
 
             if (FD_ISSET(chn->lowfd, &wset)) {
-                if (high_side) {
-                    //_vmcall(__enum_domain_op, __enum_domain_op__access_ndvm_page, (uint64_t)chn->highbuf, 0);
-                }
                 int i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
                 if (i > 0) {
                     chn->high_off -= i;

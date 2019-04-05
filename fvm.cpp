@@ -15,8 +15,8 @@ const char *secret = "Earth";
 size_t secret_size = 5;
 size_t data_size = 4096;
 
-struct filter_desc *write_queue{0};
-struct filter_desc *read_queue{0};
+struct filterq_work *write_queue{0};
+struct filterq_work *read_queue{0};
 
 std::mutex *write_mutex{0};
 std::mutex *read_mutex{0};
@@ -54,13 +54,13 @@ int main()
     const int prot = PROT_READ | PROT_WRITE;
     const int flag = MAP_ANON | MAP_PRIVATE | MAP_POPULATE;
 
-    write_queue = (struct filter_desc *)mmap(NULL, data_size, prot, flag, -1, 0);
+    write_queue = (struct filterq_work *)mmap(NULL, data_size, prot, flag, -1, 0);
     write_mutex = (std::mutex *)mmap(NULL, data_size, prot, flag, -1, 0);
     if (write_queue == MAP_FAILED || write_mutex == MAP_FAILED) {
         exit(0x10);
     }
 
-    read_queue = (struct filter_desc *)mmap(NULL, data_size, prot, flag, -1, 0);
+    read_queue = (struct filterq_work *)mmap(NULL, data_size, prot, flag, -1, 0);
     read_mutex = (std::mutex *)mmap(NULL, data_size, prot, flag, -1, 0);
     if (read_queue == MAP_FAILED || read_mutex == MAP_FAILED) {
         exit(0x20);
@@ -77,6 +77,12 @@ int main()
             (uint64_t)read_mutex);
 
     while (1) {
+        if (read_mutex->try_lock()) {
+            _vmcall(__enum_domain_op, __enum_domain_op__lock_acquired, 0, 0);
+            read_mutex->unlock();
+        }
+
+        sleep(1);
     }
 }
 
