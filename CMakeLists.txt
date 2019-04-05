@@ -1,8 +1,16 @@
 cmake_minimum_required(VERSION 3.10)
-project(ndvm C)
+project(ndvm C CXX)
 
-add_custom_target(ndvm ALL
-    COMMAND gcc -static ${CMAKE_CURRENT_LIST_DIR}/ndvm.c ${CMAKE_CURRENT_LIST_DIR}/vmcall.S -o ndvm
-)
+enable_language(ASM)
+
+add_executable(ndvm ndvm.cpp vmcall.S)
+target_compile_features(ndvm PRIVATE cxx_std_17)
+target_compile_options(ndvm PRIVATE -mtune=generic -march=x86-64)
+
+add_executable(fvm fvm.cpp vmcall.S)
+target_compile_features(fvm PRIVATE cxx_std_17)
+target_compile_options(fvm PRIVATE -mtune=generic -march=x86-64)
 
 install(PROGRAMS ndvm DESTINATION bin)
+install(PROGRAMS fvm DESTINATION bin)
+#install(PROGRAMS init.sh DESTINATION bin)
