@@ -80,9 +80,12 @@ struct channel {
             exit(0xCC01);
         }
 
-        //if (high_side) {
-        //    _vmcall(__enum_domain_op, __enum_domain_op__ndvm_share_page, (uint64_t)this->highbuf, 0);
-        //}
+        if (high_side) {
+            _vmcall(__enum_domain_op,
+                    __enum_domain_op__ndvm_share_page,
+                    (uint64_t)this->highbuf,
+                    0);
+        }
 
         struct sockaddr_in sa;
         memset(&sa, 0, sizeof(sa));
@@ -133,52 +136,40 @@ struct channel {
 
 extern "C" {
 
-std::mutex write_mutex alignas(4096);
-volatile uintptr_t write_head{};
-volatile uintptr_t write_tail{};
-volatile struct filterq_work *write_queue{};
+std::atomic<uint64_t> recv_lock alignas(4096);
+struct workq_hdr *recv_hdr{};
 
-std::mutex read_mutex alignas(4096);
-volatile uintptr_t read_head{};
-volatile uintptr_t read_tail{};
-volatile struct filterq_work *read_queue{};
+std::atomic<uint64_t> send_lock alignas(4096);
+struct workq_hdr *send_hdr{};
 
-static void init_filterq_queues(void)
+static void init_workq(void)
 {
     const int prot = (PROT_READ | PROT_WRITE);
     const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
 
-    write_queue = (struct filterq_work *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
-    read_queue = (struct filterq_work *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
+    recv_hdr = (struct workq_hdr *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
+    send_hdr = (struct workq_hdr *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
 
-    if (write_queue == MAP_FAILED || read_queue == MAP_FAILED) {
+    if (recv_hdr == MAP_FAILED || send_hdr == MAP_FAILED) {
         printf("%s: mmap failed\n", __func__);
         exit(0x50);
     }
 
-    memset((char *)write_queue, 0, PAGE_SIZE);
-    memset((char *)read_queue, 0, PAGE_SIZE);
+    recv_lock.store(0);
+    send_lock.store(0);
 
-    printf("%c\n", *(char *)&read_mutex);
-    printf("%c\n", *(char *)&write_mutex);
-
-    volatile char *dummy = (char *)&read_mutex;
-    dummy[0] = *(char *)&read_mutex;
-
-    dummy = (char *)&write_mutex;
-    dummy[0] = *(char *)&write_mutex;
+    memset((char *)recv_hdr, 0, PAGE_SIZE);
+    memset((char *)send_hdr, 0, PAGE_SIZE);
 
     _vmcall(__enum_domain_op,
             __enum_domain_op__map_write_queue,
-            (uint64_t)write_queue,
-            (uint64_t)&write_mutex);
+            (uint64_t)recv_hdr,
+            (uint64_t)&recv_lock);
 
     _vmcall(__enum_domain_op,
             __enum_domain_op__map_read_queue,
-            (uint64_t)read_queue,
-            (uint64_t)&read_mutex);
-
-    // TODO: map heads/tails
+            (uint64_t)send_hdr,
+            (uint64_t)&send_lock);
 }
 
 /**
@@ -313,19 +304,11 @@ int main(int argc, char **argv)
     init_mem();
     init_addrs(argv[2]);
     init_nic(argv[1], argv[2]);
-    init_filterq_queues();
+    if (high_side) {
+        init_workq();
+    }
 
     signal(SIGPIPE, sigpipe);
-
-    while (1) {
-        if (read_mutex.try_lock()) {
-            _vmcall(__enum_domain_op, __enum_domain_op__lock_acquired, 0, 0);
-            read_mutex.unlock();
-            dump_hex((char *)&read_mutex, sizeof(read_mutex));
-        }
-
-        sleep(1);
-    }
 
     while (1) {
         fd_set rset;
@@ -368,6 +351,7 @@ int main(int argc, char **argv)
             }
 
             chan_ptrs.push_back(std::make_unique<struct channel>(fd));
+//            sos(0);
         }
 
         for (auto i = 0; i < chan_ptrs.size(); i++) {
@@ -377,64 +361,101 @@ int main(int argc, char **argv)
             }
 
             if (FD_ISSET(chn->lowfd, &rset)) {
-                int i = recv(chn->lowfd, chn->lowbuf, chn->bufsz, 0);
-                if (i > 0) {
-                    chn->low_off += i;
-                }
-
-                if (i == EPIPE) {
-                    close_channel(chn);
-                    continue;
+                if (!chn->low_off) {
+                    int i = recv(chn->lowfd, chn->lowbuf, chn->bufsz, 0);
+                    if (i > 0) {
+                        chn->low_off += i;
+                    } else {
+                        close_channel(chn);
+                        continue;
+                    }
                 }
             }
 
             if (FD_ISSET(chn->highfd, &wset)) {
-                int i = send(chn->highfd, chn->lowbuf, chn->low_off, 0);
-                if (i > 0) {
-                    chn->low_off -= i;
-                }
-
-                if (i == EPIPE) {
-                    close_channel(chn);
-                    continue;
+                if (chn->low_off) {
+                    int i = send(chn->highfd, chn->lowbuf, chn->low_off, 0);
+                    if (i > 0) {
+                        chn->low_off -= i;
+                    } else if (i == -1) {
+                        close_channel(chn);
+                        continue;
+                    }
                 }
             }
 
             if (FD_ISSET(chn->highfd, &rset)) {
-                int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
-                if (i > 0) {
-                    chn->high_off += i;
-                    if (high_side) {
-                        // push filter work
-                        struct filterq_work work;
-                        work.nva = chn->highbuf;
-                        work.size = i;
-                        work.fva = 0;
-                        work.pad = 0;
-
-                        push_filterq_work(&write_queue, &write_mutex, &work);
+                if (!high_side) {
+                    if (!chn->high_off) {
+                        int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
+                        if (i > 0) {
+                            chn->high_off += i;
+                        } else {
+                            close_channel(chn);
+                            continue;
+                        }
                     }
-                }
-                if (!i) {
-                    close_channel(chn);
-                    continue;
-                }
+                } else {
+                    if (!chn->high_off) {
+                        acquire_lock(&recv_lock);
+                        if (!workq_full(recv_hdr)) {
+                            //sos(2);
+                            int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
+                            if (i > 0) {
+                                //sos(4);
+                                chn->high_off += i;
+                                struct workq_work work = {
+                                    (uintptr_t)chn->highbuf, (size_t)i, 0, 0
+                                };
+                                workq_push(recv_hdr, &work);
+                                //sos(5);
+                                //headtail(recv_hdr->head, recv_hdr->tail);
 
-                if (i == EPIPE) {
-                    close_channel(chn);
-                    continue;
+                            } else {
+                                //sos(3);
+                                close_channel(chn);
+                                release_lock(&recv_lock);
+                                continue;
+                            }
+                        }
+                        release_lock(&recv_lock);
+                    }
                 }
             }
 
             if (FD_ISSET(chn->lowfd, &wset)) {
-                int i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
-                if (i > 0) {
-                    chn->high_off -= i;
-                }
+                if (!high_side) {
+                    if (chn->high_off) {
+                        int i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
+                        if (i > 0) {
+                            chn->high_off -= i;
+                        } else if (i == -1) {
+                            close_channel(chn);
+                            continue;
+                        }
+                    }
+                } else {
+                    struct workq_work work;
+                    memset(&work, 0, sizeof(struct workq_work));
+                    //sos(6);
 
-                if (i == EPIPE) {
-                    close_channel(chn);
-                    continue;
+                    acquire_lock(&send_lock);
+                    while (!workq_empty(send_hdr)) {
+                        workq_pop(send_hdr, &work);
+                        if (!work.nva || !chn->high_off) {
+                            continue;
+                        }
+                        //sos(8);
+                        int i = send(chn->lowfd, (void *)work.nva, chn->high_off, 0);
+                        if (i > 0) {
+                            chn->high_off -= i;
+                            //    sos(9);
+                        } else if (i == -1) {
+                            close_channel(chn);
+                            //    sos(10);
+                        }
+                    }
+                    release_lock(&send_lock);
                 }
             }
         }

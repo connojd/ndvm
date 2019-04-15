@@ -20,6 +20,8 @@
 #ifndef _TLP2_NET_H
 #define _TLP2_NET_H
 
+#include <atomic>
+
 extern "C" {
 
 #include <stdint.h>
@@ -75,72 +77,128 @@ extern "C" {
 #define __enum_domain_op__set_read_mutex 0x14E
 
 #define __enum_domain_op__lock_acquired 0x14F
+#define __enum_domain_op__sos 0x150
+#define __enum_domain_op__headtail 0x151
+#define __enum_domain_op__dump_hdr 0x152
+
+uint64_t _vmcall(uint64_t r1, uint64_t r2, uint64_t r3, uint64_t r4);
+
+inline void sos(uint64_t code)
+{
+    _vmcall(__enum_domain_op, __enum_domain_op__sos, code, 0);
+}
+
+inline void headtail(uint64_t head, uint64_t tail)
+{
+    _vmcall(__enum_domain_op, __enum_domain_op__headtail, head, tail);
+}
+
+inline void dump_hdr(void *hdr)
+{
+    _vmcall(__enum_domain_op, __enum_domain_op__dump_hdr, (uint64_t)hdr, 0);
+}
+
 
 /**
  * We repurpose the first entry of the queue as the header
  * below to store the head and tail offsets
  */
-struct filterq_hdr {
+struct workq_hdr {
     uintptr_t head;
     uintptr_t tail;
     uintptr_t pad[2];
 };
 
-struct filterq_work {
-    /* GVA from the filter vm */
-    uintptr_t fva;
-
+struct workq_work {
     /* GVA from the ndvm */
     uintptr_t nva;
 
     /* Number of bytes to filter */
     uintptr_t size;
 
+    /* GVA from the filter vm */
+    uintptr_t fva;
+
     /* Pad to get a power of 2 */
     uintptr_t pad;
 };
 
-static_assert(sizeof(struct filterq_work) == 32);
-static_assert(sizeof(struct filterq_work) == sizeof(struct filterq_hdr));
+/* This can be changed as long as it is a power of two */
+static_assert(sizeof(struct workq_work) == 32);
 
-/* capacity is max work entries + one header */
-inline const volatile uint64_t filterq_capacity
-    = PAGE_SIZE / sizeof(struct filterq_work);
+/* NOTE: if this fails, the ptr arithmetic below will be wrong */
+static_assert(sizeof(struct workq_work) == sizeof(struct workq_hdr));
 
+/**
+ * We go to the next power of two to avoid expensive mod operations. This
+ * number depends on the size of struct workq_work and PAGE_SIZE
+ */
+inline constexpr volatile uint64_t workq_cap =
+    PAGE_SIZE / sizeof(struct workq_work); /* max # workq entries + header */
 
-inline bool filterq_empty(struct filterq_hdr *hdr)
+/* Ensure capacity is a reasonable power of two */
+static_assert((workq_cap & (workq_cap - 1)) == 0);
+static_assert(workq_cap > 2);
+
+inline const volatile uint64_t workq_len = workq_cap >> 1;
+
+/**
+ * The workq_* function below assume that the queue's
+ * lock is held by the caller
+ */
+inline bool workq_empty(struct workq_hdr *hdr)
 {
+    //dump_hdr(hdr);
     return hdr->head == hdr->tail;
 }
 
-inline bool filterq_full(struct filterq_hdr *hdr)
+inline bool workq_full(struct workq_hdr *hdr)
 {
-    /* Must include the header entry */
-    return hdr->head == (hdr->tail + 2) % filterq_capacity;
+    //dump_hdr(hdr);
+    return hdr->head == ((hdr->tail + 1) & (workq_len - 1));
 }
 
-inline void filterq_push(struct filterq_hdr *hdr, struct filterq_work *work)
+inline void workq_push(struct workq_hdr *hdr, struct workq_work *in)
 {
+    hdr->tail = ((hdr->tail + 1) & (workq_len - 1));
 
+    struct workq_work *new_work = (struct workq_work *)(hdr + 1) + hdr->tail;
+    memcpy(new_work, in, sizeof(struct workq_work));
+
+    __asm volatile("mfence" : : : "memory");
+
+    //dump_hdr(hdr);
 }
 
-inline void push_filterq_work(struct filterq_hdr *hdr,
-                              std::mutex *mtx,
-                              struct filterq_work *work)
+inline void workq_pop(struct workq_hdr *hdr,
+                      struct workq_work *work)
 {
-    mtx->lock();
+    struct workq_work *cur = (struct workq_work *)(hdr + 1) + hdr->head;
 
-    if (filterq_full(hdr)) {
-        mtx->unlock();
-        return;
+    memcpy(work, cur, sizeof(struct workq_work));
+    memset(cur, 0xBF, sizeof(struct workq_work));
+
+    hdr->head = ((hdr->head + 1) & (workq_len - 1));
+
+    __asm volatile("mfence" : : : "memory");
+}
+
+inline void acquire_lock(std::atomic<uint64_t> *lock)
+{
+    uint64_t expected = 0;
+    uint64_t desired = 1;
+
+    while (!lock->compare_exchange_weak(expected, desired)) {
+        __asm volatile("pause" ::: "memory");
     }
-    filterq_push(hdr, work);
 
-    mtx->unlock();
+    return;
 }
 
-
-uint64_t _vmcall(uint64_t r1, uint64_t r2, uint64_t r3, uint64_t r4);
+inline void release_lock(std::atomic<uint64_t> *lock)
+{
+    lock->store(0);
+}
 
 inline void dump_sock(int fd, struct sockaddr_in *sa)
 {
