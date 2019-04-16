@@ -18,11 +18,14 @@
  */
 
 #include "net.h"
+
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
+
 #include <list>
 #include <vector>
+#include <deque>
 #include <memory>
 #include <mutex>
 
@@ -47,6 +50,24 @@ static int open_socket(void)
     return fd;
 }
 
+static void *mmap_page()
+{
+    const int prot = (PROT_READ | PROT_WRITE);
+    const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
+
+    void *ret = mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
+    if (ret == MAP_FAILED) {
+        exit(0x88);
+    }
+
+    return ret;
+}
+
+struct mmap_work {
+    uint8_t *data;
+    size_t size;
+};
+
 }
 
 /**
@@ -56,36 +77,22 @@ static int open_socket(void)
 std::vector<std::unique_ptr<struct channel>> chan_ptrs;
 
 struct channel {
+    std::deque<struct mmap_work> lowwork;
+    std::deque<struct mmap_work> highwork;
     int lowfd;
     int highfd;
-    char *lowbuf;
-    char *highbuf;
-    size_t bufsz;
-    int low_off;
-    int high_off;
     int low_open;
     int high_open;
+    int id;
 
     channel(int lowfd)
     {
+        static int id = 0;
+
         const int prot = (PROT_READ | PROT_WRITE);
         const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
 
         this->lowfd = lowfd;
-        this->bufsz = PAGE_SIZE;
-
-        this->lowbuf = (char *)mmap(NULL, this->bufsz, prot, flag, -1, 0);
-        this->highbuf = (char *)mmap(NULL, this->bufsz, prot, flag, -1, 0);
-        if (this->lowbuf == MAP_FAILED || this->highbuf == MAP_FAILED) {
-            exit(0xCC01);
-        }
-
-        if (high_side) {
-            _vmcall(__enum_domain_op,
-                    __enum_domain_op__ndvm_share_page,
-                    (uint64_t)this->highbuf,
-                    0);
-        }
 
         struct sockaddr_in sa;
         memset(&sa, 0, sizeof(sa));
@@ -111,24 +118,12 @@ struct channel {
         /**
          * Once we get here, we are ready to read from the low side
          */
-        low_off = 0;
         low_open = 1;
-
-        high_off = 0;
         high_open = 1;
+        this->id = ++id;
     }
 
-    ~channel()
-    {
-        munmap(this->lowbuf, this->bufsz);
-        munmap(this->highbuf, this->bufsz);
-        close(this->lowfd);
-        close(this->highfd);
-
-        printf("closing channel\n");
-    }
-
-    bool is_closed()
+    bool closed()
     {
         return !this->high_open && !this->low_open;
     }
@@ -144,16 +139,8 @@ struct workq_hdr *send_hdr{};
 
 static void init_workq(void)
 {
-    const int prot = (PROT_READ | PROT_WRITE);
-    const int flag = (MAP_PRIVATE | MAP_ANON | MAP_POPULATE);
-
-    recv_hdr = (struct workq_hdr *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
-    send_hdr = (struct workq_hdr *)mmap(NULL, PAGE_SIZE, prot, flag, -1, 0);
-
-    if (recv_hdr == MAP_FAILED || send_hdr == MAP_FAILED) {
-        printf("%s: mmap failed\n", __func__);
-        exit(0x50);
-    }
+    recv_hdr = (struct workq_hdr *)mmap_page();
+    send_hdr = (struct workq_hdr *)mmap_page();
 
     recv_lock.store(0);
     send_lock.store(0);
@@ -273,11 +260,19 @@ static void close_channel(struct channel *chn)
     chn->low_open = 0;
     chn->high_open = 0;
 
-    munmap(chn->lowbuf, chn->bufsz);
-    munmap(chn->highbuf, chn->bufsz);
-
     close(chn->lowfd);
     close(chn->highfd);
+
+//    for (const auto &w : chn->lowwork) {
+//        munmap(w.data, PAGE_SIZE);
+//    }
+//
+//    for (const auto& w : chn->highwork) {
+//        munmap(w.data, PAGE_SIZE);
+//    }
+//
+//    chn->lowwork.clear();
+//    chn->highwork.clear();
 }
 
 /**
@@ -322,7 +317,7 @@ int main(int argc, char **argv)
 
         for (auto i = 0; i < chan_ptrs.size(); i++) {
             auto chn = chan_ptrs[i].get();
-            if (chn->is_closed()) {
+            if (chn->closed()) {
                 continue;
             }
 
@@ -356,107 +351,105 @@ int main(int argc, char **argv)
 
         for (auto i = 0; i < chan_ptrs.size(); i++) {
             auto chn = chan_ptrs[i].get();
-            if (chn->is_closed()) {
+            if (chn->closed()) {
                 continue;
             }
 
-            if (FD_ISSET(chn->lowfd, &rset)) {
-                if (!chn->low_off) {
-                    int i = recv(chn->lowfd, chn->lowbuf, chn->bufsz, 0);
-                    if (i > 0) {
-                        chn->low_off += i;
-                    } else {
-                        close_channel(chn);
-                        continue;
-                    }
-                }
-            }
+            char *buf = (char *)MAP_FAILED;
+            int n = 0;
 
-            if (FD_ISSET(chn->highfd, &wset)) {
-                if (chn->low_off) {
-                    int i = send(chn->highfd, chn->lowbuf, chn->low_off, 0);
-                    if (i > 0) {
-                        chn->low_off -= i;
-                    } else if (i == -1) {
-                        close_channel(chn);
-                        continue;
-                    }
+            if (FD_ISSET(chn->lowfd, &rset)) {
+                buf = (char *)mmap_page();
+                n = read(chn->lowfd, buf, PAGE_SIZE);
+                if (!n) {
+                    close_channel(chn);
+                    continue;
+                } else if (n < 0) {
+                    exit(0x99);
                 }
+//                sos(1);
+
+                if (FD_ISSET(chn->highfd, &wset)) {
+                    int k = write(chn->highfd, buf, n);
+                    if (k < 0) {
+                        exit(0xA0);
+                    }
+                    if (k != n) {
+                        exit(0xA1);
+                    }
+                } else {
+                    exit(0xA2);
+                }
+//                sos(2);
+                munmap(buf, PAGE_SIZE);
+                buf = (char *)MAP_FAILED;
+                n = 0;
             }
 
             if (FD_ISSET(chn->highfd, &rset)) {
-                if (!high_side) {
-                    if (!chn->high_off) {
-                        int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
-                        if (i > 0) {
-                            chn->high_off += i;
-                        } else {
-                            close_channel(chn);
-                            continue;
-                        }
-                    }
-                } else {
-                    if (!chn->high_off) {
-                        acquire_lock(&recv_lock);
-                        if (!workq_full(recv_hdr)) {
-                            //sos(2);
-                            int i = recv(chn->highfd, chn->highbuf, chn->bufsz, 0);
-                            if (i > 0) {
-                                //sos(4);
-                                chn->high_off += i;
-                                struct workq_work work = {
-                                    (uintptr_t)chn->highbuf, (size_t)i, 0, 0
-                                };
-                                workq_push(recv_hdr, &work);
-                                //sos(5);
-                                //headtail(recv_hdr->head, recv_hdr->tail);
+                buf = (char *)mmap_page();
+                n = read(chn->highfd, buf, PAGE_SIZE);
+                if (!n) {
+                    close_channel(chn);
+                    continue;
+                } else if (n < 0) {
+                    exit(0xA3);
+                }
 
-                            } else {
-                                //sos(3);
-                                close_channel(chn);
-                                release_lock(&recv_lock);
-                                continue;
+//                sos(3);
+                if (high_side) {
+                    _vmcall(__enum_domain_op,
+                            __enum_domain_op__ndvm_share_page,
+                            (uintptr_t)buf,
+                            0);
+
+                    struct workq_work work = {
+                        (uint64_t)buf, (uint64_t)n, (uint64_t)chn->id, 0
+                    };
+
+//                    sos(4);
+                    acquire_lock(&recv_lock);
+                    workq_push(recv_hdr, &work);
+                    release_lock(&recv_lock);
+
+                    if (FD_ISSET(chn->lowfd, &wset)) {
+//                    sos(5);
+retry:
+                        acquire_lock(&send_lock);
+                        if (workq_empty(send_hdr)) {
+                            release_lock(&send_lock);
+//                            sos(6);
+                            goto retry;
+                        } else {
+//                            sos(7);
+                            struct workq_work work{};
+                            workq_pop(send_hdr, &work);
+                            release_lock(&send_lock);
+
+                            int k = write(chn->lowfd, buf, n);
+                            if (k < 0) {
+                                exit(0xA4);
+                            }
+                            if (k != n || k != work.size) {
+                                exit(0xA5);
                             }
                         }
-                        release_lock(&recv_lock);
-                    }
-                }
-            }
-
-            if (FD_ISSET(chn->lowfd, &wset)) {
-                if (!high_side) {
-                    if (chn->high_off) {
-                        int i = send(chn->lowfd, chn->highbuf, chn->high_off, 0);
-                        if (i > 0) {
-                            chn->high_off -= i;
-                        } else if (i == -1) {
-                            close_channel(chn);
-                            continue;
-                        }
                     }
                 } else {
-                    struct workq_work work;
-                    memset(&work, 0, sizeof(struct workq_work));
-                    //sos(6);
-
-                    acquire_lock(&send_lock);
-                    while (!workq_empty(send_hdr)) {
-                        workq_pop(send_hdr, &work);
-                        if (!work.nva || !chn->high_off) {
-                            continue;
+                    if (FD_ISSET(chn->lowfd, &wset)) {
+//                        sos(8);
+                        int k = write(chn->lowfd, buf, n);
+                        if (k < 0) {
+                            exit(0xA6);
                         }
-                        //sos(8);
-                        int i = send(chn->lowfd, (void *)work.nva, chn->high_off, 0);
-                        if (i > 0) {
-                            chn->high_off -= i;
-                            //    sos(9);
-                        } else if (i == -1) {
-                            close_channel(chn);
-                            //    sos(10);
+                        if (k != n) {
+                            exit(0xA7);
                         }
+//                        sos(9);
                     }
-                    release_lock(&send_lock);
                 }
+//                sos(10);
+                munmap(buf, PAGE_SIZE);
             }
         }
     }

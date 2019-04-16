@@ -13,7 +13,7 @@
 #define PROT (PROT_READ | PROT_WRITE)
 #define FLAG (MAP_ANON | MAP_PRIVATE | MAP_POPULATE)
 
-const char *secret = "Earth";
+const char *secret = "Venus";
 size_t secret_size = 5;
 size_t data_size = 4096;
 
@@ -31,27 +31,29 @@ extern "C" {
 
 static void filter_body(char *data)
 {
-    char *start = (char *)memmem(data, data_size, "<body>", 6);
+    char *start = (char *)memmem(data, data_size, secret, secret_size);
     if (!start) {
         return;
     }
 
-    char *end = (char *)memmem((start + 6),
-                               data_size - (size_t)((start - data) + 6),
-                               "</body>",
-                               7);
-    if (!end) {
-        return;
-    }
+    memcpy(start, "Earth", 5);
 
-    char *body = start + 6;
-    for (int i = 0; body + i < end; i++) {
-        if (body[i] >= 'a' && body[i] <= 'z') {
-            body[i] -= 32;
-        } else if (body[i] >= 'A' && body[i] <= 'Z') {
-            body[i] += 32;
-        }
-    }
+//    char *end = (char *)memmem((start + 6),
+//                               data_size - (size_t)((start - data) + 6),
+//                               "</body>",
+//                               7);
+//    if (!end) {
+//        return;
+//    }
+
+//    char *body = start + 6;
+//    for (int i = 0; body + i < end; i++) {
+//        if (body[i] >= 'a' && body[i] <= 'z') {
+//            body[i] -= 32;
+//        } else if (body[i] >= 'A' && body[i] <= 'Z') {
+//            body[i] += 32;
+//        }
+//    }
 }
 
 void filter(const struct workq_work &work)
@@ -104,41 +106,30 @@ int main()
             (uint64_t)send_hdr,
             (uint64_t)send_lock);
 
-    headtail(recv_hdr->head, recv_hdr->tail);
-
     while (1) {
+        struct workq_work work{0};
+
+//        sos(1);
         acquire_lock(recv_lock);
-        //sos(0xFF);
         if (!workq_empty(recv_hdr)) {
-    //        sos(0xFE);
-            struct workq_work work;
             workq_pop(recv_hdr, &work);
-    //        headtail(recv_hdr->head, recv_hdr->tail);
-            recvq.push(work);
-        } else {
-   //         headtail(recv_hdr->head, recv_hdr->tail);
+//            sos(2);
         }
         release_lock(recv_lock);
 
-        while (!recvq.empty()) {
-    //        sos(0xFD);
-            filter(recvq.front());
-            sendq.push(recvq.front());
-            recvq.pop();
+        if (work.nva) {
+//            sos(3);
+            filter(work);
+        } else {
+//            sos(4);
+            continue;
         }
 
+//        sos(5);
         acquire_lock(send_lock);
-        while (!sendq.empty()) {
-   //         sos(0xFB);
-            if (!workq_full(send_hdr)) {
-   //             sos(0xFA);
-                auto work = sendq.front();
-                workq_push(send_hdr, &work);
-                sendq.pop();
-    //            headtail(recv_hdr->head, recv_hdr->tail);
-            }
-        }
+        workq_push(send_hdr, &work);
         release_lock(send_lock);
+//        sos(6);
     }
 }
 }
