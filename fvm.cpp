@@ -31,29 +31,13 @@ extern "C" {
 
 static void filter_body(char *data)
 {
-    char *start = (char *)memmem(data, data_size, secret, secret_size);
-    if (!start) {
-        return;
+    while (1) {
+        char *start = (char *)memmem(data, data_size, secret, secret_size);
+        if (!start) {
+            return;
+        }
+        memcpy(start, "Earth", 5);
     }
-
-    memcpy(start, "Earth", 5);
-
-//    char *end = (char *)memmem((start + 6),
-//                               data_size - (size_t)((start - data) + 6),
-//                               "</body>",
-//                               7);
-//    if (!end) {
-//        return;
-//    }
-
-//    char *body = start + 6;
-//    for (int i = 0; body + i < end; i++) {
-//        if (body[i] >= 'a' && body[i] <= 'z') {
-//            body[i] -= 32;
-//        } else if (body[i] >= 'A' && body[i] <= 'Z') {
-//            body[i] += 32;
-//        }
-//    }
 }
 
 void filter(const struct workq_work &work)

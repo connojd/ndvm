@@ -117,7 +117,7 @@ struct workq_work {
     uintptr_t size;
 
     /* GVA from the filter vm */
-    uintptr_t fva;
+    uintptr_t id;
 
     /* Pad to get a power of 2 */
     uintptr_t pad;
@@ -160,10 +160,10 @@ inline bool workq_full(struct workq_hdr *hdr)
 
 inline void workq_push(struct workq_hdr *hdr, struct workq_work *in)
 {
-    hdr->tail = ((hdr->tail + 1) & (workq_len - 1));
-
     struct workq_work *new_work = (struct workq_work *)(hdr + 1) + hdr->tail;
     memcpy(new_work, in, sizeof(struct workq_work));
+
+    hdr->tail = ((hdr->tail + 1) & (workq_len - 1));
 
     __asm volatile("mfence" : : : "memory");
 
@@ -176,11 +176,17 @@ inline void workq_pop(struct workq_hdr *hdr,
     struct workq_work *cur = (struct workq_work *)(hdr + 1) + hdr->head;
 
     memcpy(work, cur, sizeof(struct workq_work));
-    memset(cur, 0xBF, sizeof(struct workq_work));
+    memset(cur, 0, sizeof(struct workq_work));
 
     hdr->head = ((hdr->head + 1) & (workq_len - 1));
 
     __asm volatile("mfence" : : : "memory");
+}
+
+inline int workq_id(struct workq_hdr *hdr)
+{
+    struct workq_work *cur = (struct workq_work *)(hdr + 1) + hdr->head;
+    return cur->id;
 }
 
 inline void acquire_lock(std::atomic<uint64_t> *lock)
@@ -191,8 +197,6 @@ inline void acquire_lock(std::atomic<uint64_t> *lock)
     while (!lock->compare_exchange_weak(expected, desired)) {
         __asm volatile("pause" ::: "memory");
     }
-
-    return;
 }
 
 inline void release_lock(std::atomic<uint64_t> *lock)
@@ -208,10 +212,11 @@ inline void dump_sock(int fd, struct sockaddr_in *sa)
            ntohs(sa->sin_port));
 }
 
-inline void dump_hex(const char *str, size_t len)
+inline void dump_hex(void *str, size_t len)
 {
+    char *buf = (char *)str;
     for (int i = 0; i < len; i++) {
-        printf("%02x", str[i]);
+        printf("%02x", buf[i]);
     }
     printf("\n");
 }

@@ -148,15 +148,15 @@ static void init_workq(void)
     memset((char *)recv_hdr, 0, PAGE_SIZE);
     memset((char *)send_hdr, 0, PAGE_SIZE);
 
-    _vmcall(__enum_domain_op,
-            __enum_domain_op__map_write_queue,
-            (uint64_t)recv_hdr,
-            (uint64_t)&recv_lock);
+    //_vmcall(__enum_domain_op,
+    //        __enum_domain_op__map_write_queue,
+    //        (uint64_t)recv_hdr,
+    //        (uint64_t)&recv_lock);
 
-    _vmcall(__enum_domain_op,
-            __enum_domain_op__map_read_queue,
-            (uint64_t)send_hdr,
-            (uint64_t)&send_lock);
+    //_vmcall(__enum_domain_op,
+    //        __enum_domain_op__map_read_queue,
+    //        (uint64_t)send_hdr,
+    //        (uint64_t)&send_lock);
 }
 
 /**
@@ -397,45 +397,45 @@ int main(int argc, char **argv)
                 }
 
 //                sos(3);
-                if (high_side) {
-                    _vmcall(__enum_domain_op,
-                            __enum_domain_op__ndvm_share_page,
-                            (uintptr_t)buf,
-                            0);
+                //if (high_side) {
+                //    _vmcall(__enum_domain_op,
+                //            __enum_domain_op__ndvm_share_page,
+                //            (uintptr_t)buf,
+                //            0);
 
-                    struct workq_work work = {
-                        (uint64_t)buf, (uint64_t)n, (uint64_t)chn->id, 0
-                    };
+                //    struct workq_work work = {
+                //        (uint64_t)buf, (uint64_t)n, (uint64_t)chn->id, 0
+                //    };
 
-//                    sos(4);
-                    acquire_lock(&recv_lock);
-                    workq_push(recv_hdr, &work);
-                    release_lock(&recv_lock);
+//              //      sos(4);
+                //    acquire_lock(&recv_lock);
+                //    workq_push(recv_hdr, &work);
+                //    release_lock(&recv_lock);
 
-                    if (FD_ISSET(chn->lowfd, &wset)) {
-//                    sos(5);
+                //    if (FD_ISSET(chn->lowfd, &wset)) {
+//              //      sos(5);
 retry:
-                        acquire_lock(&send_lock);
-                        if (workq_empty(send_hdr)) {
-                            release_lock(&send_lock);
-//                            sos(6);
-                            goto retry;
-                        } else {
-//                            sos(7);
-                            struct workq_work work{};
-                            workq_pop(send_hdr, &work);
-                            release_lock(&send_lock);
+                //        acquire_lock(&send_lock);
+                //        if (workq_empty(send_hdr)) {
+                //            release_lock(&send_lock);
+//              //              sos(6);
+                //            goto retry;
+                //        } else {
+//              //              sos(7);
+                //            struct workq_work work{};
+                //            workq_pop(send_hdr, &work);
+                //            release_lock(&send_lock);
 
-                            int k = write(chn->lowfd, buf, n);
-                            if (k < 0) {
-                                exit(0xA4);
-                            }
-                            if (k != n || k != work.size) {
-                                exit(0xA5);
-                            }
-                        }
-                    }
-                } else {
+                //            int k = write(chn->lowfd, buf, n);
+                //            if (k < 0) {
+                //                exit(0xA4);
+                //            }
+                //            if (k != n || k != work.size) {
+                //                exit(0xA5);
+                //            }
+                //        }
+                //    }
+                //} else {
                     if (FD_ISSET(chn->lowfd, &wset)) {
 //                        sos(8);
                         int k = write(chn->lowfd, buf, n);
@@ -447,7 +447,7 @@ retry:
                         }
 //                        sos(9);
                     }
-                }
+//                }
 //                sos(10);
                 munmap(buf, PAGE_SIZE);
             }
